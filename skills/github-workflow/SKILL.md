@@ -13,6 +13,16 @@ Esta skill orienta o agente durante a tarefa. Ela não instala um bot, não agen
 
 Prefira o conector GitHub; use `gh` ou APIs oficiais quando a operação não estiver disponível e houver autenticação apropriada. Não presuma que acesso a repositórios inclui acesso a Projects. Verifique capacidades e permissões sem exibir tokens. Se faltar acesso, conclua as etapas independentes e informe a operação bloqueada.
 
+## Fluxo completo durante a tarefa
+
+Neste repositório, o usuário definiu como padrão que as mudanças solicitadas sejam implementadas, verificadas pela IA, revisadas no GitHub e integradas à `main` quando estiverem corretas. Portanto, conduza a tarefa até o merge; não encerre apenas porque abriu um PR e não peça novamente autorização já dada. Pedidos específicos de somente planejar, revisar, criar draft ou deixar o PR aberto prevalecem sobre esse padrão.
+
+Após abrir ou atualizar o PR, avance imediatamente para a revisão abaixo. Se encontrar defeitos dentro do escopo, corrija, publique o novo commit e repita as verificações afetadas. Prossiga até não haver bloqueadores ou até identificar um impedimento concreto que não possa resolver dentro da autorização existente. Não repita tentativas idênticas contra falhas de permissão.
+
+Se a conta conectada for autora do PR, publique uma review `COMMENT` com o SHA, evidências e a conclusão técnica da IA. Essa review não equivale a `APPROVE`. Se as regras da branch não exigirem aprovação formal por outro revisor, prossiga com o merge autorizado após concluir as verificações. Se exigirem, aguarde um revisor elegível e informe o bloqueio; não contorne a proteção. A indisponibilidade de autoaprovação, isoladamente, não é motivo para deixar aberto um PR cujo merge está permitido.
+
+Conclua confirmando o merge no GitHub, atualizando os itens existentes do Project quando aplicável e sincronizando o checkout local com `main`, preservando alterações locais. A ausência de um Project configurado não deve impedir a revisão e o merge; informe essa lacuna separadamente.
+
 ## GitHub Projects e issues
 
 - Procure o Project indicado ou já vinculado ao repositório. Se houver vários candidatos sem indicação, esclareça qual usar antes de alterar o quadro. Crie um Project apenas quando isso fizer parte da tarefa autorizada.

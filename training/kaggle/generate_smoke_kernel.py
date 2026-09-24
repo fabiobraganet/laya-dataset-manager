@@ -57,7 +57,8 @@ def main() -> None:
     rows = [example(i, i % 2 == 0) for i in range(64)]
     validate_examples(rows)
     print(f"Validated {len(rows)} synthetic test examples.")
-    DATASET.write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in rows) + "\n", encoding="utf-8")
+    dataset_text = "\n".join(json.dumps(row, ensure_ascii=False) for row in rows) + "\n"
+    DATASET.write_text(dataset_text, encoding="utf-8")
     subprocess.run(["curl", "-fsSL", UPSTREAM, "-o", str(NOTEBOOK)], check=True)
     notebook = json.loads(NOTEBOOK.read_text(encoding="utf-8"))
     for cell in notebook["cells"]:
@@ -65,6 +66,8 @@ def main() -> None:
         if 'ds_train = load_dataset("LocalLLaMA/typed-decisions", "all", split="train")' in source:
             source = source.replace(
                 'ds_train = load_dataset("LocalLLaMA/typed-decisions", "all", split="train")',
+                'from pathlib import Path\n'
+                f'Path("/kaggle/working/synthetic_typed_decisions.jsonl").write_text({dataset_text!r}, encoding="utf-8")\n'
                 'ds_train = load_dataset("json", data_files="/kaggle/working/synthetic_typed_decisions.jsonl", split="train")',
             )
             cell["source"] = source.splitlines(keepends=True)

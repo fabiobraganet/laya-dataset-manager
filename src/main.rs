@@ -1,6 +1,6 @@
-use std::{env, net::SocketAddr, path::Path, sync::{Arc, Mutex}};
+use std::{env, net::SocketAddr, path::Path as FsPath, sync::{Arc, Mutex}};
 
-use axum::{extract::{Query, State}, http::StatusCode, response::Html, routing::get, Json, Router};
+use axum::{extract::{Path, Query, State}, http::StatusCode, response::Html, routing::{get, patch}, Json, Router};
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 
@@ -14,12 +14,14 @@ fn error(status: StatusCode, message: impl Into<String>) -> (StatusCode, Json<Er
 #[derive(Clone, Serialize)] struct Folder { id: i64, parent_id: Option<i64>, name: String, created_at: String }
 #[derive(Serialize)] struct FolderNode { #[serde(flatten)] folder: Folder, children: Vec<FolderNode> }
 #[derive(Deserialize)] struct CreateFolder { parent_id: Option<i64>, name: String }
+#[derive(Deserialize)] struct UpdateFolder { parent_id: Option<i64>, name: String }
 #[derive(Serialize)] struct ContentItem { id: i64, folder_id: Option<i64>, folder_name: Option<String>, kind: String, subject: String, title: String, brief: String, markdown: String, created_at: String }
 #[derive(Deserialize)] struct CreateContent { folder_id: Option<i64>, kind: String, subject: String, title: String, brief: String, markdown: String }
 #[derive(Deserialize)] struct ContentQuery { kind: Option<String> }
 #[derive(Serialize)] struct TrainingJob { id: i64, name: String, status: String, source_count: i64, created_at: String }
 #[derive(Deserialize)] struct CreateTraining { name: Option<String> }
 #[derive(Serialize)] struct Overview { folders: i64, dataset_content: i64, training_content: i64, training_jobs: i64 }
+#[derive(Serialize)] struct KaggleRun { name: &'static str, status: &'static str, accelerator: &'static str, epochs: i64, dataset: &'static str, artifact: &'static str, url: &'static str }
 
 fn trim(value: &str, field: &str, max: usize) -> Result<String, String> {
     let value = value.trim();
@@ -33,7 +35,7 @@ fn with_db<T>(state: &AppState, f: impl FnOnce(&Connection) -> rusqlite::Result<
 }
 fn folder_exists(db: &Connection, id: i64) -> rusqlite::Result<bool> { db.query_row("SELECT EXISTS(SELECT 1 FROM folders WHERE id = ?1)", [id], |row| row.get(0)) }
 fn init_db(path: &str) -> rusqlite::Result<Connection> {
-    if let Some(parent) = Path::new(path).parent() { std::fs::create_dir_all(parent).map_err(|_| rusqlite::Error::InvalidPath(Path::new(path).to_owned()))?; }
+    if let Some(parent) = FsPath::new(path).parent() { std::fs::create_dir_all(parent).map_err(|_| rusqlite::Error::InvalidPath(FsPath::new(path).to_owned()))?; }
     let db = Connection::open(path)?;
     db.execute_batch("PRAGMA foreign_keys = ON;
         CREATE TABLE IF NOT EXISTS folders (id INTEGER PRIMARY KEY, parent_id INTEGER REFERENCES folders(id) ON DELETE CASCADE, name TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE(parent_id, name));
@@ -61,6 +63,13 @@ async fn create_folder(State(state): State<AppState>, Json(input): Json<CreateFo
     });
     match result { Ok(item)=>Ok(Json(item)), Err(_)=>Err(error(StatusCode::UNPROCESSABLE_ENTITY,"Pasta pai inválida ou já existe uma pasta com esse nome neste nível.")) }
 }
+async fn update_folder(State(state): State<AppState>, Path(id): Path<i64>, Json(input): Json<UpdateFolder>) -> ApiResult<Folder> {
+    let name=trim(&input.name,"Nome da pasta",120).map_err(|e|error(StatusCode::UNPROCESSABLE_ENTITY,e))?;
+    if input.parent_id==Some(id) { return Err(error(StatusCode::UNPROCESSABLE_ENTITY,"Uma pasta não pode ser filha dela mesma.")); }
+    let result=with_db(&state,|db|{if let Some(parent)=input.parent_id {if !folder_exists(db,parent)? {return Err(rusqlite::Error::QueryReturnedNoRows);}}if db.execute("UPDATE folders SET parent_id=?1,name=?2 WHERE id=?3",params![input.parent_id,name,id])?==0{return Err(rusqlite::Error::QueryReturnedNoRows);}db.query_row("SELECT id,parent_id,name,created_at FROM folders WHERE id=?1",[id],|r|Ok(Folder{id:r.get(0)?,parent_id:r.get(1)?,name:r.get(2)?,created_at:r.get(3)?}))});
+    result.map(Json).map_err(|_|error(StatusCode::UNPROCESSABLE_ENTITY,"Pasta inválida ou nome duplicado neste nível."))
+}
+async fn delete_folder(State(state): State<AppState>, Path(id): Path<i64>) -> Result<StatusCode,(StatusCode,Json<ErrorBody>)> { with_db(&state,|db|db.execute("DELETE FROM folders WHERE id=?1",[id]))?; Ok(StatusCode::NO_CONTENT) }
 async fn list_content(State(state): State<AppState>, Query(query): Query<ContentQuery>) -> ApiResult<Vec<ContentItem>> {
     if let Some(kind)=&query.kind { if kind!="dataset"&&kind!="training" { return Err(error(StatusCode::BAD_REQUEST,"Tipo de conteúdo inválido.")); } }
     let items: Vec<ContentItem>=with_db(&state,|db|{let mut s=db.prepare("SELECT c.id,c.folder_id,f.name,c.kind,c.subject,c.title,c.brief,c.markdown,c.created_at FROM content c LEFT JOIN folders f ON f.id=c.folder_id WHERE (?1 IS NULL OR c.kind=?1) ORDER BY c.id DESC")?;let rows=s.query_map([query.kind],|r|Ok(ContentItem{id:r.get(0)?,folder_id:r.get(1)?,folder_name:r.get(2)?,kind:r.get(3)?,subject:r.get(4)?,title:r.get(5)?,brief:r.get(6)?,markdown:r.get(7)?,created_at:r.get(8)?}))?;rows.collect::<rusqlite::Result<Vec<ContentItem>>>()})?;
@@ -72,6 +81,13 @@ async fn create_content(State(state): State<AppState>, Json(input): Json<CreateC
     let result=with_db(&state,|db|{if let Some(folder)=input.folder_id {if !folder_exists(db,folder)? {return Err(rusqlite::Error::QueryReturnedNoRows);}}db.execute("INSERT INTO content (folder_id,kind,subject,title,brief,markdown) VALUES (?1,?2,?3,?4,?5,?6)",params![input.folder_id,input.kind,subject,title,brief,markdown])?;let id=db.last_insert_rowid();db.query_row("SELECT c.id,c.folder_id,f.name,c.kind,c.subject,c.title,c.brief,c.markdown,c.created_at FROM content c LEFT JOIN folders f ON f.id=c.folder_id WHERE c.id=?1",[id],|r|Ok(ContentItem{id:r.get(0)?,folder_id:r.get(1)?,folder_name:r.get(2)?,kind:r.get(3)?,subject:r.get(4)?,title:r.get(5)?,brief:r.get(6)?,markdown:r.get(7)?,created_at:r.get(8)?}))});
     match result { Ok(item)=>Ok(Json(item)), Err(_)=>Err(error(StatusCode::UNPROCESSABLE_ENTITY,"Pasta selecionada não existe.")) }
 }
+async fn update_content(State(state): State<AppState>, Path(id): Path<i64>, Json(input): Json<CreateContent>) -> ApiResult<ContentItem> {
+    if input.kind!="dataset"&&input.kind!="training" { return Err(error(StatusCode::UNPROCESSABLE_ENTITY,"Tipo deve ser dataset ou training.")); }
+    let subject=trim(&input.subject,"Assunto",160).map_err(|e|error(StatusCode::UNPROCESSABLE_ENTITY,e))?;let title=trim(&input.title,"Título",180).map_err(|e|error(StatusCode::UNPROCESSABLE_ENTITY,e))?;let brief=trim(&input.brief,"Breve",500).map_err(|e|error(StatusCode::UNPROCESSABLE_ENTITY,e))?;let markdown=trim(&input.markdown,"Conteúdo Markdown",100_000).map_err(|e|error(StatusCode::UNPROCESSABLE_ENTITY,e))?;
+    let result=with_db(&state,|db|{if let Some(folder)=input.folder_id {if !folder_exists(db,folder)? {return Err(rusqlite::Error::QueryReturnedNoRows);}}if db.execute("UPDATE content SET folder_id=?1,kind=?2,subject=?3,title=?4,brief=?5,markdown=?6 WHERE id=?7",params![input.folder_id,input.kind,subject,title,brief,markdown,id])?==0{return Err(rusqlite::Error::QueryReturnedNoRows);}db.query_row("SELECT c.id,c.folder_id,f.name,c.kind,c.subject,c.title,c.brief,c.markdown,c.created_at FROM content c LEFT JOIN folders f ON f.id=c.folder_id WHERE c.id=?1",[id],|r|Ok(ContentItem{id:r.get(0)?,folder_id:r.get(1)?,folder_name:r.get(2)?,kind:r.get(3)?,subject:r.get(4)?,title:r.get(5)?,brief:r.get(6)?,markdown:r.get(7)?,created_at:r.get(8)?}))});result.map(Json).map_err(|_|error(StatusCode::NOT_FOUND,"Conteúdo ou pasta não encontrado."))
+}
+async fn delete_content(State(state): State<AppState>, Path(id): Path<i64>) -> Result<StatusCode,(StatusCode,Json<ErrorBody>)> { with_db(&state,|db|db.execute("DELETE FROM content WHERE id=?1",[id]))?; Ok(StatusCode::NO_CONTENT) }
+async fn kaggle_run() -> Json<KaggleRun> { Json(KaggleRun{name:"Fine-tune sintético",status:"completed",accelerator:"GPU T4 x2",epochs:4,dataset:"64 exemplos sintéticos validados",artifact:"laya_finetuned_typed_decisions",url:"https://www.kaggle.com/code/fabiobraganet/laya-dataset-manager-fine-tune-smoke-test"}) }
 async fn list_training(State(state): State<AppState>) -> ApiResult<Vec<TrainingJob>> { let jobs: Vec<TrainingJob>=with_db(&state,|db|{let mut s=db.prepare("SELECT id,name,status,source_count,created_at FROM training_jobs ORDER BY id DESC")?;let rows=s.query_map([],|r|Ok(TrainingJob{id:r.get(0)?,name:r.get(1)?,status:r.get(2)?,source_count:r.get(3)?,created_at:r.get(4)?}))?;rows.collect::<rusqlite::Result<Vec<TrainingJob>>>()})?;Ok(Json(jobs)) }
 async fn create_training(State(state): State<AppState>, Json(input): Json<CreateTraining>) -> ApiResult<TrainingJob> {
     let name=trim(&input.name.unwrap_or_else(||"Treinamento Laya".into()),"Nome do treinamento",160).map_err(|e|error(StatusCode::UNPROCESSABLE_ENTITY,e))?;
@@ -84,7 +100,8 @@ async fn overview(State(state): State<AppState>) -> ApiResult<Overview> { let va
 async fn main() {
     let database_url=env::var("APP_DATABASE_URL").unwrap_or_else(|_|"data/laya-dataset-manager.db".into()); let host=env::var("APP_HOST").unwrap_or_else(|_|"127.0.0.1".into()); let port=env::var("APP_PORT").unwrap_or_else(|_|"8080".into()).parse::<u16>().expect("APP_PORT deve ser uma porta válida");
     let database=init_db(&database_url).expect("não foi possível preparar o banco SQLite");
-    let app=Router::new().route("/",get(app)).route("/health",get(health)).route("/api/overview",get(overview)).route("/api/folders",get(list_folders).post(create_folder)).route("/api/content",get(list_content).post(create_content)).route("/api/training",get(list_training).post(create_training)).with_state(AppState{db:Arc::new(Mutex::new(database))});
+    let app=Router::new().route("/",get(app)).route("/health",get(health)).route("/api/overview",get(overview)).route("/api/folders",get(list_folders).post(create_folder)).route("/api/folders/{id}",patch(update_folder).delete(delete_folder)).route("/api/content",get(list_content).post(create_content)).route("/api/content/{id}",patch(update_content).delete(delete_content)).route("/api/training",get(list_training).post(create_training)).route("/api/training/kaggle",get(kaggle_run)).with_state(AppState{db:Arc::new(Mutex::new(database))});
     let address:SocketAddr=format!("{host}:{port}").parse().expect("APP_HOST deve ser um endereço válido"); println!("Laya Dataset Manager em http://{address}"); axum::serve(tokio::net::TcpListener::bind(address).await.expect("não foi possível abrir a porta"),app).await.expect("servidor interrompido");
 }
 #[cfg(test)] mod tests { use super::*; #[test] fn tree_keeps_nested_folders(){let folders=vec![Folder{id:1,parent_id:None,name:"Raiz".into(),created_at:"".into()},Folder{id:2,parent_id:Some(1),name:"Filha".into(),created_at:"".into()},Folder{id:3,parent_id:Some(2),name:"Neta".into(),created_at:"".into()}];let tree=build_tree(None,&folders);assert_eq!(tree[0].children[0].children[0].folder.name,"Neta");} #[test] fn database_creates_schema(){let db=init_db(":memory:").unwrap();db.execute("INSERT INTO folders (name) VALUES ('Dados')",[]).unwrap();assert!(folder_exists(&db,1).unwrap());}}
+

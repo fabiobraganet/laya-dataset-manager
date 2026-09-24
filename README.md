@@ -4,7 +4,7 @@ Aplicação para gerenciamento de datasets e apoio ao treinamento do Laya.
 
 ## Estado atual
 
-Estrutura inicial com uma página provisória e o runtime oficial Laya 0.3.11 em CUDA. O Laya é executado como API local com o checkpoint multilíngue. As funcionalidades do gerenciador e o fluxo de treinamento serão definidos na próxima etapa; o runtime instalado atualmente fornece inferência.
+Aplicativo Rust com SQLite para organizar material de dataset e conteúdo de treinamento do Laya. O runtime oficial Laya 0.3.11 continua disponível como API local CUDA com o checkpoint multilíngue.
 
 ## Ambiente
 
@@ -26,7 +26,7 @@ cp .env.example .env
 docker compose up -d --build --wait
 ```
 
-Acesse a página provisória em <http://localhost:8080> e a documentação da API Laya em <http://localhost:8000/docs>. As portas são publicadas somente no endereço local. Ajuste `APP_PORT` e `LAYA_PORT` no `.env` para alterá-las.
+Acesse o gerenciador em <http://localhost:8080> e a documentação da API Laya em <http://localhost:8000/docs>. As portas são publicadas somente no endereço local. Ajuste `APP_PORT` e `LAYA_PORT` no `.env` para alterá-las.
 
 ## Comandos
 
@@ -60,14 +60,13 @@ Após editar a página, a configuração do Nginx ou o container Laya, execute n
 
 ## Organização
 
-- `public/`: página provisória.
+- `src/`: API Rust e esquema SQLite.
+- `static/`: interface web do gerenciador.
 - `docker/laya/`: imagem reproduzível do runtime Laya.
-- `docker/`: configuração do container.
 - `compose.yaml` e `Dockerfile`: ambiente reproduzível; imagem base fixada por digest.
 - `docs/`: especificações do projeto.
-- `data/`: reservado para arquivos locais, ignorados pelo Git.
 
-O repositório é destinado a ser público. Datasets, modelos, checkpoints e segredos não devem ser versionados. O `.env.example` contém apenas configuração de exemplo. Modelos são armazenados em volume Docker; o serviço não monta nem processa datasets nesta etapa.
+O banco SQLite fica no volume Docker `laya-dataset-manager-app-data`; modelos ficam em `laya-dataset-manager-model-cache`. Ambos ficam fora do Git. Datasets, modelos, checkpoints e segredos não devem ser versionados.
 
 ## Próxima etapa
 

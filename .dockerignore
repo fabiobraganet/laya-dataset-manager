@@ -1,5 +1,11 @@
 *
 !Dockerfile
+!Cargo.toml
+!Cargo.lock
+!src/
+!src/**
+!static/
+!static/**
 !docker/
 !docker/nginx.conf
 !public/

@@ -16,4 +16,4 @@ def prepare(run_dir: Path, kernel_ref: str, jsonl: str) -> None:
             source = "print('Publishing is managed by Laya Dataset Manager.')\n"
         cell["source"] = source.splitlines(keepends=True)
     (run_dir / "train.ipynb").write_text(json.dumps(notebook), encoding="utf-8")
-    (run_dir / "kernel-metadata.json").write_text(json.dumps({"id":kernel_ref,"title":"Laya Dataset Manager training","code_file":"train.ipynb","language":"python","kernel_type":"notebook","is_private":True,"enable_gpu":True,"enable_internet":True}), encoding="utf-8")
+    (run_dir / "kernel-metadata.json").write_text(json.dumps({"id":kernel_ref,"title":kernel_ref.split("/",1)[1],"code_file":"train.ipynb","language":"python","kernel_type":"notebook","is_private":True,"enable_gpu":True,"enable_internet":True}), encoding="utf-8")

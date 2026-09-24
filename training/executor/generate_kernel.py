@@ -1,4 +1,4 @@
-import json
+import base64, json
 from pathlib import Path
 
 UPSTREAM = "https://raw.githubusercontent.com/NandhaKishorM/laya/main/notebooks/laya_finetune_typed_decisions_2xT4_kaggle.ipynb"
@@ -9,6 +9,8 @@ def prepare(run_dir: Path, kernel_ref: str, jsonl: str) -> None:
     run_dir.mkdir(parents=True, exist_ok=True)
     (run_dir / "dataset.jsonl").write_text(jsonl, encoding="utf-8")
     notebook = json.load(urllib.request.urlopen(UPSTREAM, timeout=30))
+    encoded = base64.b64encode(jsonl.encode()).decode()
+    notebook["cells"].insert(0, {"cell_type":"code","execution_count":None,"metadata":{},"outputs":[],"source":["import base64\n",f"open('/kaggle/working/dataset.jsonl','wb').write(base64.b64decode('{encoded}'))\n"]})
     for cell in notebook.get("cells", []):
         source = "".join(cell.get("source", []))
         source = source.replace('load_dataset("LocalLLaMA/typed-decisions", "all", split="train")', 'load_dataset("json", data_files="/kaggle/working/dataset.jsonl", split="train")')

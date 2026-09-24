@@ -14,6 +14,8 @@ fn error(status: StatusCode, message: impl Into<String>) -> (StatusCode, Json<Er
 #[derive(Clone, Serialize)] struct Folder { id: i64, parent_id: Option<i64>, name: String, created_at: String }
 #[derive(Serialize)] struct FolderNode { #[serde(flatten)] folder: Folder, children: Vec<FolderNode> }
 #[derive(Deserialize)] struct CreateFolder { parent_id: Option<i64>, name: String }
+#[derive(Clone, Serialize)] struct Dataset { id: i64, name: String, description: String, created_at: String, updated_at: String }
+#[derive(Deserialize)] struct CreateDataset { name: String, description: String }
 #[derive(Deserialize)] struct UpdateFolder { parent_id: Option<i64>, name: String }
 #[derive(Serialize)] struct ContentItem { id: i64, folder_id: Option<i64>, folder_name: Option<String>, kind: String, subject: String, title: String, brief: String, markdown: String, created_at: String }
 #[derive(Deserialize)] struct CreateContent { folder_id: Option<i64>, kind: String, subject: String, title: String, brief: String, markdown: String }
@@ -38,11 +40,21 @@ fn folder_is_descendant(db: &Connection, id: i64, candidate: i64) -> rusqlite::R
 fn init_db(path: &str) -> rusqlite::Result<Connection> {
     if let Some(parent) = FsPath::new(path).parent() { std::fs::create_dir_all(parent).map_err(|_| rusqlite::Error::InvalidPath(FsPath::new(path).to_owned()))?; }
     let db = Connection::open(path)?;
-    db.execute_batch("PRAGMA foreign_keys = ON;
+    db.execute_batch("PRAGMA foreign_keys = ON; CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);")?;
+    let version:i64=db.query_row("SELECT COALESCE(MAX(version),0) FROM schema_migrations",[],|r|r.get(0))?;
+    if version < 1 { db.execute_batch("
         CREATE TABLE IF NOT EXISTS folders (id INTEGER PRIMARY KEY, parent_id INTEGER REFERENCES folders(id) ON DELETE CASCADE, name TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE(parent_id, name));
         CREATE TABLE IF NOT EXISTS content (id INTEGER PRIMARY KEY, folder_id INTEGER REFERENCES folders(id) ON DELETE SET NULL, kind TEXT NOT NULL CHECK(kind IN ('dataset','training')), subject TEXT NOT NULL, title TEXT NOT NULL, brief TEXT NOT NULL, markdown TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
         CREATE TABLE IF NOT EXISTS training_jobs (id INTEGER PRIMARY KEY, name TEXT NOT NULL, status TEXT NOT NULL, source_count INTEGER NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
-        CREATE TABLE IF NOT EXISTS training_job_items (training_job_id INTEGER NOT NULL REFERENCES training_jobs(id) ON DELETE CASCADE, content_id INTEGER NOT NULL REFERENCES content(id), PRIMARY KEY(training_job_id, content_id));")?;
+        CREATE TABLE IF NOT EXISTS training_job_items (training_job_id INTEGER NOT NULL REFERENCES training_jobs(id) ON DELETE CASCADE, content_id INTEGER NOT NULL REFERENCES content(id), PRIMARY KEY(training_job_id, content_id));
+        INSERT INTO schema_migrations(version) VALUES (1);")?; }
+    if version < 2 { db.execute_batch("
+        CREATE TABLE datasets (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE, description TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+        CREATE TABLE dataset_imports (id INTEGER PRIMARY KEY, dataset_id INTEGER NOT NULL REFERENCES datasets(id) ON DELETE CASCADE, file_name TEXT NOT NULL, total_lines INTEGER NOT NULL DEFAULT 0, valid_lines INTEGER NOT NULL DEFAULT 0, invalid_lines INTEGER NOT NULL DEFAULT 0, duplicate_lines INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+        CREATE TABLE dataset_examples (id INTEGER PRIMARY KEY, dataset_id INTEGER NOT NULL REFERENCES datasets(id) ON DELETE CASCADE, import_id INTEGER REFERENCES dataset_imports(id) ON DELETE SET NULL, example_id TEXT NOT NULL, state_json TEXT NOT NULL, questions_json TEXT NOT NULL, gold_json TEXT NOT NULL, validation_status TEXT NOT NULL CHECK(validation_status IN ('valid','invalid')), validation_errors_json TEXT NOT NULL DEFAULT '[]', source TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE(dataset_id,example_id));
+        CREATE TABLE dataset_versions (id INTEGER PRIMARY KEY, dataset_id INTEGER NOT NULL REFERENCES datasets(id) ON DELETE RESTRICT, number INTEGER NOT NULL, example_count INTEGER NOT NULL, content_sha256 TEXT NOT NULL, contract_version TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE(dataset_id,number));
+        CREATE TABLE dataset_version_examples (dataset_version_id INTEGER NOT NULL REFERENCES dataset_versions(id) ON DELETE CASCADE, example_id TEXT NOT NULL, state_json TEXT NOT NULL, questions_json TEXT NOT NULL, gold_json TEXT NOT NULL, PRIMARY KEY(dataset_version_id,example_id));
+        INSERT INTO schema_migrations(version) VALUES (2);")?; }
     Ok(db)
 }
 fn build_tree(parent: Option<i64>, folders: &[Folder]) -> Vec<FolderNode> {
@@ -51,6 +63,8 @@ fn build_tree(parent: Option<i64>, folders: &[Folder]) -> Vec<FolderNode> {
 
 async fn health() -> &'static str { "ok\n" }
 async fn app() -> Html<&'static str> { Html(APP_HTML) }
+async fn list_datasets(State(state): State<AppState>) -> ApiResult<Vec<Dataset>> { Ok(Json(with_db(&state,|db|{let mut s=db.prepare("SELECT id,name,description,created_at,updated_at FROM datasets ORDER BY updated_at DESC,id DESC")?;let rows=s.query_map([],|r|Ok(Dataset{id:r.get(0)?,name:r.get(1)?,description:r.get(2)?,created_at:r.get(3)?,updated_at:r.get(4)?}))?;let datasets=rows.collect::<rusqlite::Result<Vec<_>>>()?;Ok(datasets)})?)) }
+async fn create_dataset(State(state): State<AppState>, Json(input): Json<CreateDataset>) -> ApiResult<Dataset> { let name=trim(&input.name,"Nome do dataset",120).map_err(|e|error(StatusCode::UNPROCESSABLE_ENTITY,e))?;let description=trim(&input.description,"Descrição",1000).map_err(|e|error(StatusCode::UNPROCESSABLE_ENTITY,e))?;with_db(&state,|db|{db.execute("INSERT INTO datasets(name,description) VALUES(?1,?2)",params![name,description])?;let id=db.last_insert_rowid();db.query_row("SELECT id,name,description,created_at,updated_at FROM datasets WHERE id=?1",[id],|r|Ok(Dataset{id:r.get(0)?,name:r.get(1)?,description:r.get(2)?,created_at:r.get(3)?,updated_at:r.get(4)?}))}).map(Json).map_err(|_|error(StatusCode::UNPROCESSABLE_ENTITY,"Já existe um dataset com esse nome.")) }
 async fn list_folders(State(state): State<AppState>) -> ApiResult<Vec<FolderNode>> {
     let folders: Vec<Folder> = with_db(&state, |db| { let mut s = db.prepare("SELECT id, parent_id, name, created_at FROM folders ORDER BY name COLLATE NOCASE")?; let rows = s.query_map([], |r| Ok(Folder { id:r.get(0)?, parent_id:r.get(1)?, name:r.get(2)?, created_at:r.get(3)? }))?; rows.collect::<rusqlite::Result<Vec<Folder>>>() })?;
     Ok(Json(build_tree(None, &folders)))
@@ -101,8 +115,8 @@ async fn overview(State(state): State<AppState>) -> ApiResult<Overview> { let va
 async fn main() {
     let database_url=env::var("APP_DATABASE_URL").unwrap_or_else(|_|"data/laya-dataset-manager.db".into()); let host=env::var("APP_HOST").unwrap_or_else(|_|"127.0.0.1".into()); let port=env::var("APP_PORT").unwrap_or_else(|_|"8080".into()).parse::<u16>().expect("APP_PORT deve ser uma porta válida");
     let database=init_db(&database_url).expect("não foi possível preparar o banco SQLite");
-    let app=Router::new().route("/",get(app)).route("/health",get(health)).route("/api/overview",get(overview)).route("/api/folders",get(list_folders).post(create_folder)).route("/api/folders/{id}",patch(update_folder).delete(delete_folder)).route("/api/content",get(list_content).post(create_content)).route("/api/content/{id}",patch(update_content).delete(delete_content)).route("/api/training",get(list_training).post(create_training)).route("/api/training/kaggle",get(kaggle_run)).with_state(AppState{db:Arc::new(Mutex::new(database))});
+    let app=Router::new().route("/",get(app)).route("/health",get(health)).route("/api/datasets",get(list_datasets).post(create_dataset)).route("/api/overview",get(overview)).route("/api/folders",get(list_folders).post(create_folder)).route("/api/folders/{id}",patch(update_folder).delete(delete_folder)).route("/api/content",get(list_content).post(create_content)).route("/api/content/{id}",patch(update_content).delete(delete_content)).route("/api/training",get(list_training).post(create_training)).route("/api/training/kaggle",get(kaggle_run)).with_state(AppState{db:Arc::new(Mutex::new(database))});
     let address:SocketAddr=format!("{host}:{port}").parse().expect("APP_HOST deve ser um endereço válido"); println!("Laya Dataset Manager em http://{address}"); axum::serve(tokio::net::TcpListener::bind(address).await.expect("não foi possível abrir a porta"),app).await.expect("servidor interrompido");
 }
-#[cfg(test)] mod tests { use super::*; #[test] fn tree_keeps_nested_folders(){let folders=vec![Folder{id:1,parent_id:None,name:"Raiz".into(),created_at:"".into()},Folder{id:2,parent_id:Some(1),name:"Filha".into(),created_at:"".into()},Folder{id:3,parent_id:Some(2),name:"Neta".into(),created_at:"".into()}];let tree=build_tree(None,&folders);assert_eq!(tree[0].children[0].children[0].folder.name,"Neta");} #[test] fn database_creates_schema(){let db=init_db(":memory:").unwrap();db.execute("INSERT INTO folders (name) VALUES ('Dados')",[]).unwrap();assert!(folder_exists(&db,1).unwrap());}}
+#[cfg(test)] mod tests { use super::*; #[test] fn tree_keeps_nested_folders(){let folders=vec![Folder{id:1,parent_id:None,name:"Raiz".into(),created_at:"".into()},Folder{id:2,parent_id:Some(1),name:"Filha".into(),created_at:"".into()},Folder{id:3,parent_id:Some(2),name:"Neta".into(),created_at:"".into()}];let tree=build_tree(None,&folders);assert_eq!(tree[0].children[0].children[0].folder.name,"Neta");} #[test] fn migrations_preserve_legacy_and_add_dataset_domain(){let db=init_db(":memory:").unwrap();db.execute("INSERT INTO folders (name) VALUES ('Dados')",[]).unwrap();db.execute("INSERT INTO datasets(name,description) VALUES ('juridico','Dataset jurídico')",[]).unwrap();let version:i64=db.query_row("SELECT MAX(version) FROM schema_migrations",[],|r|r.get(0)).unwrap();assert_eq!(version,2);assert!(folder_exists(&db,1).unwrap());}}
 

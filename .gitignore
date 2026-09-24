@@ -17,5 +17,8 @@ __pycache__/
 node_modules/
 dist/
 *.log
+training/kaggle/kernel-metadata.json
+training/kaggle/laya_finetune_smoke.ipynb
+training/kaggle/synthetic_typed_decisions.jsonl
 .DS_Store
 Thumbs.db

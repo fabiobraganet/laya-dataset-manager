@@ -7,6 +7,14 @@ def prepare(run_dir: Path, kernel_ref: str, jsonl: str) -> None:
     """Build a private Kaggle kernel only from an immutable exported version."""
     import urllib.request
     run_dir.mkdir(parents=True, exist_ok=True)
+    rows=[]
+    for line in jsonl.splitlines():
+        if not line.strip(): continue
+        row=json.loads(line)
+        for key in ("state","questions","gold"):
+            if not isinstance(row.get(key),str): row[key]=json.dumps(row[key],ensure_ascii=False)
+        rows.append(json.dumps(row,ensure_ascii=False))
+    jsonl="\n".join(rows)+"\n"
     (run_dir / "dataset.jsonl").write_text(jsonl, encoding="utf-8")
     notebook = json.load(urllib.request.urlopen(UPSTREAM, timeout=30))
     encoded = base64.b64encode(jsonl.encode()).decode()

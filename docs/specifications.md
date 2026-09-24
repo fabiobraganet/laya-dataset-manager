@@ -12,6 +12,10 @@ Status: aguardando detalhamento.
 - Hardware detectado: NVIDIA RTX 2000 Ada, 8 GB de VRAM.
 - Runtime inicial: PyTorch 2.11.0 com CUDA 12.8, checkpoint multilíngue e API local na porta 8000.
 - Cache dos modelos: volume Docker fora do Git.
+- Aplicativo: Rust + Axum com SQLite persistido em volume Docker.
+- Organização: árvore de pastas recursiva, sem limite fixo de níveis.
+- Conteúdo: assunto, título, breve descrição e Markdown; itens podem ser classificados como dataset ou conteúdo de treinamento.
+- Treinamento: pedidos registram o conjunto de conteúdos selecionado e aguardam uma API de treinamento do Laya.
 
 ## A definir
 

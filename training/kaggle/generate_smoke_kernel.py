@@ -16,9 +16,47 @@ def example(index: int, urgent: bool) -> dict:
         "gold": json.dumps({"urgente": {"label": "true" if urgent else "false", "probabilities": {"false": 0.0 if urgent else 1.0, "true": 1.0 if urgent else 0.0}}}, ensure_ascii=False),
     }
 
+def validate_examples(rows: list[dict]) -> None:
+    """Reject malformed or non-synthetic input before a Kaggle submission."""
+    if len(rows) < 2:
+        raise ValueError("The smoke dataset must contain at least two examples.")
+
+    labels = set()
+    for position, row in enumerate(rows, start=1):
+        required = {"id", "state", "questions", "gold"}
+        if set(row) != required or not row["id"].startswith("synthetic-"):
+            raise ValueError(f"Example {position} has an invalid synthetic schema.")
+
+        state = json.loads(row["state"])
+        questions = json.loads(row["questions"])
+        gold = json.loads(row["gold"])
+        if not isinstance(state.get("text"), str) or not state["text"].strip():
+            raise ValueError(f"Example {position} has no state text.")
+        if questions.get("urgente") != {
+            "type": "noul", "instructions": "O atendimento é urgente?"
+        }:
+            raise ValueError(f"Example {position} has an invalid question.")
+
+        answer = gold.get("urgente")
+        if not isinstance(answer, dict) or answer.get("label") not in {"true", "false"}:
+            raise ValueError(f"Example {position} has an invalid gold label.")
+        probabilities = answer.get("probabilities")
+        if (
+            not isinstance(probabilities, dict)
+            or set(probabilities) != {"true", "false"}
+            or sum(probabilities.values()) != 1.0
+        ):
+            raise ValueError(f"Example {position} has invalid probabilities.")
+        labels.add(answer["label"])
+
+    if labels != {"true", "false"}:
+        raise ValueError("The smoke dataset must contain both labels.")
+
 def main() -> None:
     ROOT.mkdir(parents=True, exist_ok=True)
     rows = [example(i, i % 2 == 0) for i in range(64)]
+    validate_examples(rows)
+    print(f"Validated {len(rows)} synthetic test examples.")
     DATASET.write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in rows) + "\n", encoding="utf-8")
     subprocess.run(["curl", "-fsSL", UPSTREAM, "-o", str(NOTEBOOK)], check=True)
     notebook = json.loads(NOTEBOOK.read_text(encoding="utf-8"))

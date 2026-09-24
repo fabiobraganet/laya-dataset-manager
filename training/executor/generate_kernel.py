@@ -11,6 +11,13 @@ def prepare(run_dir: Path, kernel_ref: str, jsonl: str) -> None:
     for line in jsonl.splitlines():
         if not line.strip(): continue
         row=json.loads(line)
+        questions=row.get("questions",{}) if isinstance(row.get("questions"),dict) else json.loads(row["questions"])
+        gold=row.get("gold",{}) if isinstance(row.get("gold"),dict) else json.loads(row["gold"])
+        for qid,q in questions.items():
+            q.setdefault("instructions", qid.replace("_"," ").strip().capitalize()+"?")
+            if q.get("type")=="noul" and isinstance(gold.get(qid),bool):
+                value=gold[qid]; gold[qid]={"label":str(value).lower(),"probabilities":{"false":0.0 if value else 1.0,"true":1.0 if value else 0.0}}
+        row["gold"]=gold
         for key in ("state","questions","gold"):
             if not isinstance(row.get(key),str): row[key]=json.dumps(row[key],ensure_ascii=False)
         rows.append(json.dumps(row,ensure_ascii=False))

@@ -34,6 +34,7 @@ fn with_db<T>(state: &AppState, f: impl FnOnce(&Connection) -> rusqlite::Result<
     f(&db).map_err(|e| error(StatusCode::INTERNAL_SERVER_ERROR, format!("Erro no banco: {e}")))
 }
 fn folder_exists(db: &Connection, id: i64) -> rusqlite::Result<bool> { db.query_row("SELECT EXISTS(SELECT 1 FROM folders WHERE id = ?1)", [id], |row| row.get(0)) }
+fn folder_is_descendant(db: &Connection, id: i64, candidate: i64) -> rusqlite::Result<bool> { db.query_row("WITH RECURSIVE descendants(id) AS (SELECT id FROM folders WHERE parent_id=?1 UNION ALL SELECT f.id FROM folders f JOIN descendants d ON f.parent_id=d.id) SELECT EXISTS(SELECT 1 FROM descendants WHERE id=?2)",params![id,candidate],|row|row.get(0)) }
 fn init_db(path: &str) -> rusqlite::Result<Connection> {
     if let Some(parent) = FsPath::new(path).parent() { std::fs::create_dir_all(parent).map_err(|_| rusqlite::Error::InvalidPath(FsPath::new(path).to_owned()))?; }
     let db = Connection::open(path)?;
@@ -66,8 +67,8 @@ async fn create_folder(State(state): State<AppState>, Json(input): Json<CreateFo
 async fn update_folder(State(state): State<AppState>, Path(id): Path<i64>, Json(input): Json<UpdateFolder>) -> ApiResult<Folder> {
     let name=trim(&input.name,"Nome da pasta",120).map_err(|e|error(StatusCode::UNPROCESSABLE_ENTITY,e))?;
     if input.parent_id==Some(id) { return Err(error(StatusCode::UNPROCESSABLE_ENTITY,"Uma pasta não pode ser filha dela mesma.")); }
-    let result=with_db(&state,|db|{if let Some(parent)=input.parent_id {if !folder_exists(db,parent)? {return Err(rusqlite::Error::QueryReturnedNoRows);}}if db.execute("UPDATE folders SET parent_id=?1,name=?2 WHERE id=?3",params![input.parent_id,name,id])?==0{return Err(rusqlite::Error::QueryReturnedNoRows);}db.query_row("SELECT id,parent_id,name,created_at FROM folders WHERE id=?1",[id],|r|Ok(Folder{id:r.get(0)?,parent_id:r.get(1)?,name:r.get(2)?,created_at:r.get(3)?}))});
-    result.map(Json).map_err(|_|error(StatusCode::UNPROCESSABLE_ENTITY,"Pasta inválida ou nome duplicado neste nível."))
+    let result=with_db(&state,|db|{if let Some(parent)=input.parent_id {if !folder_exists(db,parent)?||folder_is_descendant(db,id,parent)? {return Err(rusqlite::Error::QueryReturnedNoRows);}}if db.execute("UPDATE folders SET parent_id=?1,name=?2 WHERE id=?3",params![input.parent_id,name,id])?==0{return Err(rusqlite::Error::QueryReturnedNoRows);}db.query_row("SELECT id,parent_id,name,created_at FROM folders WHERE id=?1",[id],|r|Ok(Folder{id:r.get(0)?,parent_id:r.get(1)?,name:r.get(2)?,created_at:r.get(3)?}))});
+    result.map(Json).map_err(|_|error(StatusCode::UNPROCESSABLE_ENTITY,"Pasta inválida, destino descendente ou nome duplicado neste nível."))
 }
 async fn delete_folder(State(state): State<AppState>, Path(id): Path<i64>) -> Result<StatusCode,(StatusCode,Json<ErrorBody>)> { with_db(&state,|db|db.execute("DELETE FROM folders WHERE id=?1",[id]))?; Ok(StatusCode::NO_CONTENT) }
 async fn list_content(State(state): State<AppState>, Query(query): Query<ContentQuery>) -> ApiResult<Vec<ContentItem>> {

@@ -83,6 +83,8 @@ def main() -> None:
             cell["source"] = ["print('Model publishing disabled for this private smoke run.')\n"]
         if 'ds_test = load_dataset("LocalLLaMA/typed-decisions", "all", split="test")' in source:
             cell["source"] = ["print('Evaluation skipped: this smoke run validates training and checkpoint generation.')\n"]
+        if 'for item in predictions:' in source or 'report = {' in source:
+            cell["source"] = ["print('Metrics skipped: this smoke run validates training and checkpoint generation.')\n"]
     NOTEBOOK.write_text(json.dumps(notebook, ensure_ascii=False, indent=1), encoding="utf-8")
     (ROOT / "kernel-metadata.json").write_text(json.dumps({
         "id": "fabiobraganet/laya-dataset-manager-fine-tune-smoke-test",

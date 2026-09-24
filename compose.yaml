@@ -11,3 +11,45 @@ services:
       timeout: 3s
       retries: 3
       start_period: 5s
+
+  laya:
+    build:
+      context: ./docker/laya
+      args:
+        TORCH_INDEX: "${LAYA_TORCH_INDEX:-cu128}"
+        TORCH_VERSION: "${LAYA_TORCH_VERSION:-2.11.0}"
+    ports:
+      - "127.0.0.1:${LAYA_PORT:-8000}:8000"
+    environment:
+      HF_HOME: /home/laya/.cache/huggingface
+      HF_HUB_OFFLINE: "${HF_HUB_OFFLINE:-0}"
+      HF_TOKEN: "${HF_TOKEN:-}"
+      LAYA_AUTO_TASK: "0"
+      LAYA_DEVICE: "${LAYA_DEVICE:-cuda}"
+      LAYA_HOST: 0.0.0.0
+      LAYA_MODEL: "${LAYA_MODEL:-multilingual}"
+      LAYA_MODELS: "${LAYA_MODELS:-multilingual}"
+      LAYA_PORT: "8000"
+      LAYA_PRELOAD: "1"
+      OMP_NUM_THREADS: "4"
+    volumes:
+      - laya-model-cache:/home/laya/.cache/huggingface
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    init: true
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5)"]
+      interval: 15s
+      timeout: 6s
+      retries: 20
+      start_period: 5m
+
+volumes:
+  laya-model-cache:
+    name: laya-dataset-manager-model-cache

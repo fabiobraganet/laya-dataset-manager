@@ -91,6 +91,8 @@ Na tela **Modelos**, ative um checkpoint validado e selecione **Testar inferênc
 
 A mesma tela reúne checkpoints LAYA locais e modelos LAYA pertencentes à conta conectada do Hugging Face. Apenas um modelo especializado pode ficar carregado no localhost: pare o modelo atual antes de iniciar outro. **Parar modelo** descarrega o agente e libera a memória da GPU; **Iniciar** carrega explicitamente o checkpoint selecionado. Modelos de outras arquiteturas não entram nesse inventário.
 
+Ao iniciar um modelo do Hugging Face, o aplicativo baixa e instala o checkpoint automaticamente no cache persistente do runtime. Um modal acompanha o percentual real, bytes transferidos, arquivo atual e a etapa de carregamento; ao chegar a 100%, confirma que o modelo está ativo e pronto para inferência. Downloads posteriores reutilizam o cache local.
+
 Depois que o Kaggle conclui e o executor valida o checkpoint, a publicação no Hugging Face é automática. O aplicativo cria um repositório privado com nome derivado do dataset e da versão, envia os arquivos do modelo, adiciona o Model Card e o manifesto de procedência e confirma que `model.safetensors` existe e possui tamanho válido. A tela **Modelos** mostra `Agendada`, `Publicando`, `No Hugging Face` ou `Falha no envio`, além do link do repositório. É necessário configurar um token Hugging Face do tipo **Write**; uma credencial nova faz o aplicativo repetir automaticamente publicações que falharam por autorização.
 
 A mesma operação pode ser testada pela API da aplicação:

@@ -6,15 +6,20 @@ import threading
 import uuid
 from pathlib import Path
 
+os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
+
 import uvicorn
 from fastapi import HTTPException, Request
-from huggingface_hub import HfApi, get_token, login
+from huggingface_hub import HfApi, get_token, hf_hub_download, login, snapshot_download
 from laya import Agent, Router
 from laya.serve import create_app
+from tqdm.auto import tqdm
 
 MODELS_ROOT = Path("/models").resolve()
 ACTIVE_FILE = Path(os.environ.get("LAYA_ACTIVE_FILE", "/home/laya/.cache/huggingface/laya-active.json"))
 PUBLISH_ROOT = Path(os.environ.get("LAYA_PUBLISH_ROOT", "/home/laya/.cache/huggingface/publish-jobs"))
+START_ROOT = Path(os.environ.get("LAYA_START_ROOT", "/home/laya/.cache/huggingface/start-jobs"))
+DOWNLOAD_CONTEXT = threading.local()
 
 
 def checked_model_path(value: str) -> Path:
@@ -71,6 +76,69 @@ def save_publish_job(job_id, **values):
     temp.write_text(json.dumps(current, ensure_ascii=False, indent=2))
     temp.replace(path)
     return current
+
+
+def save_start_job(job_id, **values):
+    START_ROOT.mkdir(parents=True, exist_ok=True)
+    path = START_ROOT / f"{job_id}.json"
+    current = json.loads(path.read_text()) if path.exists() else {"id": job_id}
+    current.update(values)
+    temp = path.with_suffix(".tmp")
+    temp.write_text(json.dumps(current, ensure_ascii=False, indent=2))
+    temp.replace(path)
+    return current
+
+
+class DownloadProgress(tqdm):
+    def update(self, amount=1):
+        result = super().update(amount)
+        context = getattr(DOWNLOAD_CONTEXT, "value", None)
+        if context:
+            downloaded = min(context["base"] + self.n, context["total"])
+            percent = min(85, 5 + round(downloaded * 80 / max(context["total"], 1)))
+            save_start_job(context["job_id"], status="downloading", percent=percent,
+                           downloaded_bytes=downloaded, total_bytes=context["total"],
+                           current_file=context["filename"], message="Baixando arquivos do Hugging Face")
+        return result
+
+
+def start_remote_model(job_id, model_id):
+    try:
+        token = get_token()
+        api = HfApi(token=token)
+        info = api.model_info(model_id, files_metadata=True)
+        files = [item for item in info.siblings if getattr(item, "size", None) and not item.rfilename.startswith(".")]
+        total = sum(item.size for item in files)
+        completed = 0
+        save_start_job(job_id, status="downloading", percent=5, downloaded_bytes=0,
+                       total_bytes=total, message="Preparando download")
+        for item in files:
+            DOWNLOAD_CONTEXT.value = {"job_id": job_id, "base": completed, "total": total,
+                                      "filename": item.rfilename}
+            hf_hub_download(repo_id=model_id, filename=item.rfilename, token=token,
+                            tqdm_class=DownloadProgress)
+            completed += item.size
+            save_start_job(job_id, status="downloading", percent=min(85, 5 + round(completed * 80 / max(total, 1))),
+                           downloaded_bytes=completed, total_bytes=total,
+                           current_file=item.rfilename, message="Download em andamento")
+        DOWNLOAD_CONTEXT.value = None
+        model_path = snapshot_download(repo_id=model_id, token=token, local_files_only=True)
+        save_start_job(job_id, status="loading", percent=90, downloaded_bytes=total,
+                       total_bytes=total, message="Carregando o modelo no runtime LAYA")
+        agent = Agent(model_path, device=device)
+        router.attach("typed-decisions", agent)
+        value = {"source": "huggingface", "model_id": model_id}
+        ACTIVE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        temp = ACTIVE_FILE.with_suffix(".tmp")
+        temp.write_text(json.dumps(value))
+        temp.replace(ACTIVE_FILE)
+        save_start_job(job_id, status="ready", percent=100, downloaded_bytes=total,
+                       total_bytes=total, message="Modelo ativo no localhost", active=value)
+    except Exception as exc:
+        logging.exception("Hugging Face model activation failed")
+        save_start_job(job_id, status="failed", message="Não foi possível iniciar o modelo", error=str(exc))
+    finally:
+        DOWNLOAD_CONTEXT.value = None
 
 
 def publish_model(job_id, body):
@@ -180,18 +248,19 @@ async def start_huggingface_model(request: Request):
     allowed = {item["model_id"] for item in huggingface_laya_models()}
     if model_id not in allowed:
         raise HTTPException(status_code=422, detail="O repositório não foi reconhecido como um modelo LAYA desta conta.")
-    try:
-        agent = Agent(model_id, device=device)
-        router.attach("typed-decisions", agent)
-        value = {"source": "huggingface", "model_id": model_id}
-        ACTIVE_FILE.parent.mkdir(parents=True, exist_ok=True)
-        temp = ACTIVE_FILE.with_suffix(".tmp")
-        temp.write_text(json.dumps(value))
-        temp.replace(ACTIVE_FILE)
-        return {"active": True, **value}
-    except Exception:
-        logging.exception("Hugging Face model activation failed")
-        raise HTTPException(status_code=500, detail="Não foi possível carregar o modelo LAYA do Hugging Face.")
+    job_id = str(uuid.uuid4())
+    state = save_start_job(job_id, status="queued", percent=0, downloaded_bytes=0,
+                           total_bytes=0, model_id=model_id, message="Preparando o modelo")
+    threading.Thread(target=start_remote_model, args=(job_id, model_id), daemon=True).start()
+    return state
+
+
+@app.get("/admin/models/huggingface/start/{job_id}")
+async def start_huggingface_status(job_id: str):
+    path = START_ROOT / f"{job_id}.json"
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Inicialização não encontrada.")
+    return json.loads(path.read_text())
 
 
 @app.post("/admin/models/stop")

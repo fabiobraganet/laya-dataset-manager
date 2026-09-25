@@ -18,6 +18,7 @@
         <li class="nav-item"><a class="nav-link active" href="#datasets" data-view="datasets"><i class="ti ti-database me-2"></i>Datasets</a></li>
         <li class="nav-item"><a class="nav-link" href="#training" data-view="training"><i class="ti ti-player-play me-2"></i>Treinamentos</a></li>
         <li class="nav-item"><a class="nav-link" href="#models" data-view="models"><i class="ti ti-cpu me-2"></i>Modelos</a></li>
+        <li class="nav-item"><a class="nav-link" href="#settings" data-view="settings"><i class="ti ti-settings me-2"></i>Configurações</a></li>
       </ul></div>
     </div>
   </header>
@@ -45,6 +46,22 @@
     <section class="app-view d-none" id="view-models">
       <div class="page-header"><div class="container-xl"><div class="row align-items-center"><div class="col"><div class="page-pretitle">Runtime</div><h2 class="page-title">Modelos</h2></div><div class="col-auto"><button class="btn btn-primary" id="open-inference"><i class="ti ti-flask me-1"></i>Testar inferência</button></div></div></div></div>
       <div class="page-body"><div class="container-xl"><div class="alert alert-info" id="active-model-banner"><i class="ti ti-info-circle me-2"></i>Nenhum modelo especializado ativo.</div><div class="card"><div class="card-header"><h3 class="card-title">Modelos validados</h3></div><div id="model-grid" class="table-responsive"></div></div></div></div>
+    </section>
+
+    <section class="app-view d-none" id="view-settings">
+      <div class="page-header"><div class="container-xl"><div class="page-pretitle">Integrações</div><h2 class="page-title">Configurações</h2></div></div>
+      <div class="page-body"><div class="container-xl">
+        <div class="alert alert-info"><i class="ti ti-lock me-2"></i>As credenciais ficam somente nos volumes locais do aplicativo. As chaves salvas nunca são exibidas pela interface ou pela API.</div>
+        <div class="row row-cards">
+          <div class="col-lg-6"><form class="card h-100" id="kaggle-settings-form"><div class="card-header"><div><h3 class="card-title mb-1">Kaggle</h3><div class="text-secondary">Submissão e acompanhamento dos treinamentos</div></div><div class="ms-auto" id="kaggle-settings-status"></div></div><div class="card-body">
+            <label class="form-label">Formato da credencial</label><div class="form-selectgroup mb-3"><label class="form-selectgroup-item"><input type="radio" name="kaggle-mode" value="token" class="form-selectgroup-input" checked><span class="form-selectgroup-label">API token</span></label><label class="form-selectgroup-item"><input type="radio" name="kaggle-mode" value="legacy" class="form-selectgroup-input"><span class="form-selectgroup-label">Usuário e chave</span></label></div>
+            <div id="kaggle-token-fields"><label class="form-label" for="kaggle-token">API token</label><input type="password" class="form-control" id="kaggle-token" autocomplete="new-password" placeholder="Cole o token do Kaggle"><div class="form-hint">Formato recomendado nas credenciais atuais do Kaggle.</div></div>
+            <div id="kaggle-legacy-fields" class="d-none"><div class="mb-3"><label class="form-label" for="kaggle-username">Usuário</label><input class="form-control" id="kaggle-username" autocomplete="off"></div><label class="form-label" for="kaggle-key">Chave da API</label><input type="password" class="form-control" id="kaggle-key" autocomplete="new-password"></div>
+            <div class="invalid-feedback d-block mt-3" id="kaggle-settings-error"></div>
+          </div><div class="card-footer text-end"><button class="btn btn-primary" id="save-kaggle"><i class="ti ti-plug-connected me-1"></i>Salvar e testar</button></div></form></div>
+          <div class="col-lg-6"><form class="card h-100" id="huggingface-settings-form"><div class="card-header"><div><h3 class="card-title mb-1">Hugging Face</h3><div class="text-secondary">Acesso a modelos privados e restritos</div></div><div class="ms-auto" id="huggingface-settings-status"></div></div><div class="card-body"><label class="form-label" for="huggingface-token">Access token</label><input type="password" class="form-control" id="huggingface-token" autocomplete="new-password" placeholder="hf_••••••••••••"><div class="form-hint">Use um token com o menor conjunto de permissões necessário.</div><div class="invalid-feedback d-block mt-3" id="huggingface-settings-error"></div></div><div class="card-footer text-end"><button class="btn btn-primary" id="save-huggingface"><i class="ti ti-plug-connected me-1"></i>Salvar e testar</button></div></form></div>
+        </div>
+      </div></div>
     </section>
   </main>
 </div>

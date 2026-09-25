@@ -1,17 +1,51 @@
-import hashlib, json, os, shutil, subprocess, tarfile, threading, uuid
+import hashlib, json, os, shutil, subprocess, tarfile, tempfile, threading, uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from generate_kernel import prepare
 
-ROOT=Path('/state/runs'); LOCK=threading.Lock(); TERMINAL={'succeeded','failed','downloading'}
+ROOT=Path('/state/runs'); CREDENTIALS=Path('/state/credentials/kaggle'); LOCK=threading.Lock(); TERMINAL={'succeeded','failed','downloading'}
+def credential_mode():
+    if (CREDENTIALS/'token').is_file(): return 'token'
+    if (CREDENTIALS/'kaggle.json').is_file(): return 'legacy'
+    return None
+def kaggle_env(directory=None,token=None):
+    env=os.environ.copy(); env['KAGGLE_CONFIG_DIR']=str(directory or CREDENTIALS)
+    stored=CREDENTIALS/'token'
+    if token is not None: env['KAGGLE_API_TOKEN']=token
+    elif stored.is_file(): env['KAGGLE_API_TOKEN']=stored.read_text().strip()
+    else: env.pop('KAGGLE_API_TOKEN',None)
+    return env
 def save(run,**values):
     with LOCK:
         path=ROOT/run/'state.json'; data=json.loads(path.read_text()) if path.exists() else {'id':run,'logs':[]}
         data.update(values); path.parent.mkdir(parents=True,exist_ok=True); path.write_text(json.dumps(data,ensure_ascii=False,indent=2)); return data
-def command(args,timeout=600):
-    result=subprocess.run(args,capture_output=True,text=True,timeout=timeout); lines=(result.stdout+result.stderr).splitlines()
+def command(args,timeout=600,env=None):
+    result=subprocess.run(args,capture_output=True,text=True,timeout=timeout,env=env or kaggle_env()); lines=(result.stdout+result.stderr).splitlines()
     if result.returncode: raise RuntimeError('\n'.join(lines[-100:]))
     return lines
+def connection_status():
+    mode=credential_mode()
+    if not mode: return {'configured':False,'connected':False,'mode':None,'account':None,'message':'Credencial Kaggle não configurada.'}
+    try:
+        lines=command(['python','-m','kaggle','datasets','list','--page-size','1'],60)
+        return {'configured':True,'connected':True,'mode':mode,'account':None,'message':'Conexão com o Kaggle validada.'}
+    except Exception as exc:
+        return {'configured':True,'connected':False,'mode':mode,'account':None,'message':str(exc)}
+def save_kaggle_credential(payload):
+    token=str(payload.get('token','')).strip(); username=str(payload.get('username','')).strip(); key=str(payload.get('key','')).strip()
+    if token and (username or key): raise ValueError('Informe um token ou usuário e chave, não ambos.')
+    if not token and not (username and key): raise ValueError('Informe o token ou o usuário e a chave do Kaggle.')
+    with tempfile.TemporaryDirectory() as raw:
+        directory=Path(raw); env=kaggle_env(directory,token if token else None)
+        if not token:
+            candidate=directory/'kaggle.json'; candidate.write_text(json.dumps({'username':username,'key':key})); candidate.chmod(0o600)
+        command(['python','-m','kaggle','datasets','list','--page-size','1'],60,env)
+    CREDENTIALS.mkdir(parents=True,exist_ok=True); CREDENTIALS.chmod(0o700)
+    for path in (CREDENTIALS/'token',CREDENTIALS/'kaggle.json'):
+        if path.exists(): path.unlink()
+    target=CREDENTIALS/('token' if token else 'kaggle.json')
+    target.write_text(token if token else json.dumps({'username':username,'key':key})); target.chmod(0o600)
+    return connection_status()
 def validate_safetensors(archive,member):
     stream=archive.extractfile(member)
     if stream is None or member.size<=8: raise RuntimeError('model.safetensors está vazio')
@@ -73,16 +107,19 @@ class H(BaseHTTPRequestHandler):
     def reply(self,code,value):
         body=json.dumps(value,ensure_ascii=False).encode(); self.send_response(code); self.send_header('content-type','application/json'); self.send_header('content-length',str(len(body))); self.end_headers(); self.wfile.write(body)
     def do_GET(self):
-        if self.path=='/health': return self.reply(200,{'status':'ok','credential':os.path.isfile('/root/.kaggle/kaggle.json')})
+        if self.path=='/health': return self.reply(200,{'status':'ok','credential':credential_mode() is not None})
         if self.path=='/connection':
-            try:
-                lines=command(['python','-m','kaggle','datasets','list','--page-size','1'],60); return self.reply(200,{'configured':True,'connected':True,'message':lines[-1] if lines else 'Kaggle conectado'})
-            except Exception as exc: return self.reply(503,{'configured':os.path.isfile('/root/.kaggle/kaggle.json'),'connected':False,'message':str(exc)})
+            status=connection_status(); return self.reply(200 if status['connected'] else 503,status)
+        if self.path=='/settings': return self.reply(200,connection_status())
         if self.path=='/runs': return self.reply(200,[refresh(p.parent.name) for p in sorted(ROOT.glob('*/state.json'),key=lambda p:p.stat().st_mtime,reverse=True)])
         if self.path.startswith('/runs/'):
             state=refresh(self.path.split('/')[-1]); return self.reply(200,state) if state else self.reply(404,{'error':'run not found'})
         return self.reply(404,{'error':'not found'})
     def do_POST(self):
+        if self.path=='/settings/kaggle':
+            try:
+                payload=json.loads(self.rfile.read(int(self.headers.get('content-length','0')))); return self.reply(200,save_kaggle_credential(payload))
+            except Exception as exc: return self.reply(422,{'error':str(exc)})
         if self.path!='/runs': return self.reply(404,{'error':'not found'})
         try:
             payload=json.loads(self.rfile.read(int(self.headers.get('content-length','0'))))

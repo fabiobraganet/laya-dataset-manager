@@ -30,17 +30,14 @@ As portas são publicadas apenas em `127.0.0.1`. Dados, cache e modelos ficam em
 - conta Kaggle com acesso a notebooks e aceleradores;
 - Git e GitHub CLI para contribuição.
 
-## Configurar a credencial Kaggle
+## Configurar integrações
 
-No Ubuntu:
+Depois de iniciar o aplicativo, abra **Configurações** na navegação principal.
 
-```bash
-mkdir -p ~/.kaggle
-cp /mnt/c/Users/SEU_USUARIO/Downloads/kaggle.json ~/.kaggle/kaggle.json
-chmod 600 ~/.kaggle/kaggle.json
-```
+- **Kaggle:** informe o API token atual ou, para contas antigas, usuário e chave. O aplicativo valida a conexão antes de salvar.
+- **Hugging Face:** informe um access token. O runtime consulta a identidade da conta antes de salvar.
 
-O arquivo é montado no executor como somente leitura. Nunca versione, envie por chat ou inclua `kaggle.json` em imagens Docker.
+As credenciais são gravadas com acesso restrito nos volumes Docker locais `kaggle-run-state` e `laya-model-cache`. Elas não são armazenadas no SQLite, incluídas em imagens, retornadas pela API ou reapresentadas na interface. Para trocar uma credencial, salve a nova chave no mesmo formulário; a anterior é substituída somente depois que a nova conexão for validada.
 
 ## Iniciar
 

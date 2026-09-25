@@ -31,7 +31,6 @@ services:
     environment:
       HF_HOME: /home/laya/.cache/huggingface
       HF_HUB_OFFLINE: "${HF_HUB_OFFLINE:-0}"
-      HF_TOKEN: "${HF_TOKEN:-}"
       LAYA_AUTO_TASK: "0"
       LAYA_DEVICE: "${LAYA_DEVICE:-cuda}"
       LAYA_HOST: 0.0.0.0

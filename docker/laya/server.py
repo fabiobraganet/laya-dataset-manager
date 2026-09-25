@@ -1,6 +1,9 @@
 import json
 import logging
 import os
+import re
+import threading
+import uuid
 from pathlib import Path
 
 import uvicorn
@@ -11,6 +14,7 @@ from laya.serve import create_app
 
 MODELS_ROOT = Path("/models").resolve()
 ACTIVE_FILE = Path(os.environ.get("LAYA_ACTIVE_FILE", "/home/laya/.cache/huggingface/laya-active.json"))
+PUBLISH_ROOT = Path(os.environ.get("LAYA_PUBLISH_ROOT", "/home/laya/.cache/huggingface/publish-jobs"))
 
 
 def checked_model_path(value: str) -> Path:
@@ -22,6 +26,11 @@ def checked_model_path(value: str) -> Path:
 
 def active_path():
     if not ACTIVE_FILE.is_file():
+        return None
+    try:
+        value = json.loads(ACTIVE_FILE.read_text())
+        return checked_model_path(value["model_path"]) if value.get("source", "local") == "local" else None
+    except Exception:
         return None
 
 
@@ -51,10 +60,42 @@ def huggingface_laya_models():
             continue
         result.append({"model_id": model.id, "private": bool(model.private), "updated_at": str(model.last_modified or ""), "source": "huggingface"})
     return result
+
+
+def save_publish_job(job_id, **values):
+    PUBLISH_ROOT.mkdir(parents=True, exist_ok=True)
+    path = PUBLISH_ROOT / f"{job_id}.json"
+    current = json.loads(path.read_text()) if path.exists() else {"id": job_id}
+    current.update(values)
+    temp = path.with_suffix(".tmp")
+    temp.write_text(json.dumps(current, ensure_ascii=False, indent=2))
+    temp.replace(path)
+    return current
+
+
+def publish_model(job_id, body):
     try:
-        return checked_model_path(json.loads(ACTIVE_FILE.read_text())["model_path"])
-    except Exception:
-        return None
+        path = checked_model_path(body["model_path"])
+        api = HfApi(token=get_token())
+        account = api.whoami().get("name")
+        slug = re.sub(r"[^a-z0-9-]+", "-", body["repo_name"].lower()).strip("-")[:80]
+        repo_id = f"{account}/{slug}"
+        save_publish_job(job_id, status="creating", repo_id=repo_id, logs=["Criando repositório privado no Hugging Face"])
+        api.create_repo(repo_id=repo_id, repo_type="model", private=True, exist_ok=True)
+        save_publish_job(job_id, status="uploading", repo_id=repo_id, logs=["Repositório criado", "Enviando checkpoint LAYA"])
+        commit = api.upload_folder(repo_id=repo_id, repo_type="model", folder_path=str(path), commit_message=f"Publish LAYA checkpoint {body['sha256'][:12]}")
+        card = f"---\nlibrary_name: laya\ntags:\n- laya\n- text-classification\n---\n\n# {body['title']}\n\nCheckpoint LAYA gerado pelo Laya Dataset Manager.\n\n- Dataset: {body['dataset_name']} v{body['version_number']}\n- SHA-256: `{body['sha256']}`\n- Kaggle run: `{body['training_run_id']}`\n"
+        manifest = json.dumps({k: body[k] for k in ("sha256", "dataset_name", "version_number", "training_run_id")}, ensure_ascii=False, indent=2).encode()
+        api.upload_file(repo_id=repo_id, repo_type="model", path_or_fileobj=card.encode(), path_in_repo="README.md", commit_message="Add LAYA model card")
+        final = api.upload_file(repo_id=repo_id, repo_type="model", path_or_fileobj=manifest, path_in_repo="laya-manifest.json", commit_message="Add provenance manifest")
+        info = api.model_info(repo_id, files_metadata=True)
+        weights = next((item for item in info.siblings if item.rfilename == "model.safetensors"), None)
+        if not weights or not getattr(weights, "size", 0):
+            raise RuntimeError("publicação concluída sem model.safetensors verificável")
+        save_publish_job(job_id, status="published", repo_id=repo_id, url=f"https://huggingface.co/{repo_id}", revision=final.oid or commit.oid, bytes=weights.size, logs=["Checkpoint enviado", "Arquivos e tamanho verificados", "Publicação concluída"])
+    except Exception as exc:
+        logging.exception("Hugging Face publish failed")
+        save_publish_job(job_id, status="failed", error=str(exc), logs=["Falha na publicação", str(exc)])
 
 
 device = os.environ.get("LAYA_DEVICE") or None
@@ -161,6 +202,26 @@ async def stop_model():
     router.unload("typed-decisions")
     ACTIVE_FILE.unlink(missing_ok=True)
     return {"active": False, "stopped": current}
+
+
+@app.post("/admin/publish")
+async def queue_publish(request: Request):
+    body = await request.json()
+    checked_model_path(body.get("model_path", ""))
+    if not get_token():
+        raise HTTPException(status_code=422, detail="Configure uma credencial Hugging Face com escrita.")
+    job_id = str(uuid.uuid4())
+    state = save_publish_job(job_id, status="queued", logs=["Publicação agendada"])
+    threading.Thread(target=publish_model, args=(job_id, body), daemon=True).start()
+    return state
+
+
+@app.get("/admin/publish/{job_id}")
+async def publish_status(job_id: str):
+    path = PUBLISH_ROOT / f"{job_id}.json"
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Publicação não encontrada.")
+    return json.loads(path.read_text())
 
 
 if __name__ == "__main__":

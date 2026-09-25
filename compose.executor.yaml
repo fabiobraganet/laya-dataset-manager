@@ -5,10 +5,10 @@ services:
       dockerfile: training/executor/Dockerfile
     environment:
       PYTHONUNBUFFERED: "1"
+      KAGGLE_CONFIG_DIR: /state/credentials/kaggle
     ports:
       - "127.0.0.1:8090:8090"
     volumes:
-      - ${KAGGLE_CONFIG_DIR:-/root/.kaggle}/kaggle.json:/root/.kaggle/kaggle.json:ro
       - kaggle-run-state:/state
       - laya-model-artifacts:/models
     healthcheck:

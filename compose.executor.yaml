@@ -10,6 +10,7 @@ services:
     volumes:
       - ${KAGGLE_CONFIG_DIR:-/root/.kaggle}/kaggle.json:/root/.kaggle/kaggle.json:ro
       - kaggle-run-state:/state
+      - laya-model-artifacts:/models
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/health', timeout=3)"]
       interval: 10s
@@ -18,3 +19,5 @@ services:
       start_period: 10s
 volumes:
   kaggle-run-state:
+  laya-model-artifacts:
+    name: laya-dataset-manager-model-artifacts

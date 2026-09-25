@@ -32,5 +32,14 @@ def prepare(run_dir: Path, kernel_ref: str, jsonl: str) -> None:
         if "UserSecretsClient" in source or "api.upload_folder" in source:
             source = "print('Publishing is managed by Laya Dataset Manager.')\n"
         cell["source"] = source.splitlines(keepends=True)
+    notebook["cells"].append({"cell_type":"code","execution_count":None,"metadata":{},"outputs":[],"source":[
+        "import os, tarfile, hashlib, json\n",
+        "model_path='/kaggle/working/laya_finetuned_typed_decisions/model.safetensors'\n",
+        "assert os.path.getsize(model_path)>0, 'Generated model.safetensors is empty'\n",
+        "archive='/kaggle/working/laya_checkpoint.tar.gz'\n",
+        "with tarfile.open(archive,'w:gz') as tar: tar.add('/kaggle/working/laya_finetuned_typed_decisions',arcname='laya_finetuned_typed_decisions')\n",
+        "digest=hashlib.sha256(open(archive,'rb').read()).hexdigest()\n",
+        "json.dump({'archive':'laya_checkpoint.tar.gz','bytes':os.path.getsize(archive),'sha256':digest},open('/kaggle/working/checkpoint_manifest.json','w'),indent=2)\n",
+        "print('Validated checkpoint archive:',os.path.getsize(archive),'bytes',digest)\n"]})
     (run_dir / "train.ipynb").write_text(json.dumps(notebook), encoding="utf-8")
     (run_dir / "kernel-metadata.json").write_text(json.dumps({"id":kernel_ref,"title":kernel_ref.split("/",1)[1],"code_file":"train.ipynb","language":"python","kernel_type":"notebook","is_private":True,"enable_gpu":True,"enable_internet":True}), encoding="utf-8")

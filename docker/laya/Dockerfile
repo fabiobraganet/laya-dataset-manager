@@ -26,6 +26,7 @@ RUN groupadd --gid 10001 laya \
 
 USER laya
 WORKDIR /home/laya
+COPY --chown=laya:laya server.py /home/laya/server.py
 EXPOSE 8000
 
-ENTRYPOINT ["laya-serve"]
+ENTRYPOINT ["python", "/home/laya/server.py"]

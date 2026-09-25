@@ -23,6 +23,34 @@ def checked_model_path(value: str) -> Path:
 def active_path():
     if not ACTIVE_FILE.is_file():
         return None
+
+
+def active_model():
+    if not ACTIVE_FILE.is_file():
+        return None
+    try:
+        value = json.loads(ACTIVE_FILE.read_text())
+        if value.get("model_path") and not value.get("source"):
+            value.update({"source": "local", "model_id": "typed-decisions"})
+        return value
+    except Exception:
+        return None
+
+
+def huggingface_laya_models():
+    token = get_token()
+    if not token:
+        return []
+    account = HfApi().whoami(token=token).get("name")
+    models = HfApi().list_models(author=account, token=token, full=True)
+    result = []
+    for model in models:
+        tags = list(model.tags or [])
+        library = getattr(model, "library_name", None)
+        if "laya" not in model.id.lower() and library != "laya" and not any("laya" in tag.lower() for tag in tags):
+            continue
+        result.append({"model_id": model.id, "private": bool(model.private), "updated_at": str(model.last_modified or ""), "source": "huggingface"})
+    return result
     try:
         return checked_model_path(json.loads(ACTIVE_FILE.read_text())["model_path"])
     except Exception:
@@ -30,7 +58,8 @@ def active_path():
 
 
 device = os.environ.get("LAYA_DEVICE") or None
-configured = active_path()
+saved_active = active_model()
+configured = saved_active.get("model_id") if saved_active and saved_active.get("source") == "huggingface" else active_path()
 models = {"typed-decisions": str(configured)} if configured else None
 router = Router(models=models, device=device, max_loaded=2, auto_task_detection=False)
 preload = [name.strip() for name in os.environ.get("LAYA_MODELS", "multilingual").split(",") if name.strip()]
@@ -73,20 +102,65 @@ async def save_huggingface(request: Request):
 @app.post("/admin/activate")
 async def activate(request: Request):
     try:
+        if active_model():
+            raise HTTPException(status_code=409, detail="Pare o modelo LAYA ativo antes de iniciar outro.")
         body = await request.json()
         path = checked_model_path(body.get("model_path", ""))
         agent = Agent(str(path), device=device)
         router.attach("typed-decisions", agent)
         ACTIVE_FILE.parent.mkdir(parents=True, exist_ok=True)
         temp = ACTIVE_FILE.with_suffix(".tmp")
-        temp.write_text(json.dumps({"model_path": str(path), "sha256": body.get("sha256")}))
+        temp.write_text(json.dumps({"source": "local", "model_id": "typed-decisions", "model_path": str(path), "sha256": body.get("sha256")}))
         temp.replace(ACTIVE_FILE)
         return {"active": True, "model": "typed-decisions", "model_path": str(path), "sha256": body.get("sha256")}
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
     except Exception as exc:
+        if isinstance(exc, HTTPException):
+            raise
         logging.exception("checkpoint activation failed")
         raise HTTPException(status_code=500, detail="não foi possível carregar o checkpoint")
+
+
+@app.get("/admin/models")
+async def models_status():
+    try:
+        remote = huggingface_laya_models()
+        return {"active": active_model(), "huggingface": remote}
+    except Exception as exc:
+        return {"active": active_model(), "huggingface": [], "huggingface_error": str(exc)}
+
+
+@app.post("/admin/models/huggingface/start")
+async def start_huggingface_model(request: Request):
+    if active_model():
+        raise HTTPException(status_code=409, detail="Pare o modelo LAYA ativo antes de iniciar outro.")
+    model_id = str((await request.json()).get("model_id", "")).strip()
+    allowed = {item["model_id"] for item in huggingface_laya_models()}
+    if model_id not in allowed:
+        raise HTTPException(status_code=422, detail="O repositório não foi reconhecido como um modelo LAYA desta conta.")
+    try:
+        agent = Agent(model_id, device=device)
+        router.attach("typed-decisions", agent)
+        value = {"source": "huggingface", "model_id": model_id}
+        ACTIVE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        temp = ACTIVE_FILE.with_suffix(".tmp")
+        temp.write_text(json.dumps(value))
+        temp.replace(ACTIVE_FILE)
+        return {"active": True, **value}
+    except Exception:
+        logging.exception("Hugging Face model activation failed")
+        raise HTTPException(status_code=500, detail="Não foi possível carregar o modelo LAYA do Hugging Face.")
+
+
+@app.post("/admin/models/stop")
+async def stop_model():
+    current = active_model()
+    if not current:
+        return {"active": False}
+    router.unload("typed-decisions")
+    ACTIVE_FILE.unlink(missing_ok=True)
+    return {"active": False, "stopped": current}
 
 
 if __name__ == "__main__":

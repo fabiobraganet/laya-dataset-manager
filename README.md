@@ -89,6 +89,8 @@ O checkpoint é materializado no volume `laya-dataset-manager-model-artifacts`. 
 
 Na tela **Modelos**, ative um checkpoint validado e selecione **Testar inferência**. Informe `state` e `questions`; a resposta exibida vem de `POST /v1/systemone` do runtime LAYA.
 
+A mesma tela reúne checkpoints LAYA locais e modelos LAYA pertencentes à conta conectada do Hugging Face. Apenas um modelo especializado pode ficar carregado no localhost: pare o modelo atual antes de iniciar outro. **Parar modelo** descarrega o agente e libera a memória da GPU; **Iniciar** carrega explicitamente o checkpoint selecionado. Modelos de outras arquiteturas não entram nesse inventário.
+
 A mesma operação pode ser testada pela API da aplicação:
 
 ```bash

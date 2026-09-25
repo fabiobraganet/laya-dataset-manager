@@ -1,134 +1,142 @@
 # Laya Dataset Manager
 
-Aplicação local para organizar conhecimento em Markdown, montar datasets auditáveis e preparar especializações do [Laya](https://github.com/NandhaKishorM/laya). Roda no Ubuntu do WSL2 com Docker e Docker Compose.
+Aplicação local para criar, validar, versionar e treinar datasets tipados do [LAYA](https://github.com/NandhaKishorM/laya). O produto usa Rust/Axum, SQLite, Docker Compose, um executor Kaggle separado e o runtime LAYA com GPU.
 
-## Visão geral
+## Fluxo suportado
 
-| Serviço | Função | Endereço |
+1. Crie um dataset e inclua exemplos manualmente ou por JSONL.
+2. Corrija os diagnósticos de schema, IDs duplicados, perguntas e respostas.
+3. Congele uma `DatasetVersion` imutável. A versão registra quantidade, contrato e SHA-256.
+4. Execute a pré-validação e envie a versão ao kernel privado do Kaggle.
+5. Acompanhe status e logs reais; ao concluir, o executor baixa e valida o checkpoint.
+6. Ative um artefato validado no runtime LAYA.
+7. Execute inferências reais com `state` e `questions` pela tela **Modelos**.
+
+## Serviços
+
+| Serviço | Responsabilidade | Endereço local |
 | --- | --- | --- |
-| `web` | Aplicação Rust/Axum, interface e SQLite | <http://localhost:8080> |
-| `laya` | Runtime oficial Laya em CUDA | <http://localhost:8000> |
+| `web` | API Rust/Axum, SQLite e interface Tabler | <http://127.0.0.1:8080> |
+| `laya` | Runtime LAYA e modelo especializado ativo | <http://127.0.0.1:8000> |
+| `kaggle-executor` | Exportação, submissão, monitoramento e coleta | <http://127.0.0.1:8090> |
 
-O SQLite fica no volume `laya-dataset-manager-app-data` e os modelos no volume `laya-dataset-manager-model-cache`. Ambos ficam fora do Git. As portas são vinculadas somente a `127.0.0.1`.
-
-## Recursos disponíveis
-
-- Pastas recursivas e multinível.
-- Conteúdos com assunto, título, breve e Markdown.
-- Separação entre material de dataset e de treinamento.
-- Pedidos de treinamento com snapshot dos conteúdos incluídos.
-- Inferência Laya local com checkpoint multilíngue.
-
-> O pedido de treinamento atual é rastreável, mas ainda não executa fine-tune. O estado `waiting_for_laya_training_api` não comprova treinamento do modelo.
+As portas são publicadas apenas em `127.0.0.1`. Dados, cache e modelos ficam em volumes Docker, fora do Git.
 
 ## Pré-requisitos
 
-- WSL2 com a distribuição `Ubuntu`.
-- Docker Engine e Docker Compose.
-- GPU NVIDIA e NVIDIA Container Toolkit para a inferência CUDA.
-- Git.
+- WSL2 com a distribuição registrada como `Ubuntu`;
+- Docker Engine com Docker Compose;
+- GPU NVIDIA acessível pelo Docker para o runtime LAYA;
+- conta Kaggle com acesso a notebooks e aceleradores;
+- Git e GitHub CLI para contribuição.
 
-## Início rápido
-
-No PowerShell:
-
-```powershell
-wsl -d Ubuntu --cd /opt/projects/laya-dataset-manager
-```
+## Configurar a credencial Kaggle
 
 No Ubuntu:
 
 ```bash
-cp .env.example .env
-docker compose up -d --build --wait
-```
-
-Abra <http://localhost:8080>. O primeiro início baixa dependências e o checkpoint do Laya; os seguintes reutilizam o cache.
-
-## Uso do sistema
-
-1. Em **Conteúdo**, crie pastas raiz ou filhas. Exemplo: `Atendimento > Financeiro > Cancelamentos`.
-2. Cadastre cada material com tipo, pasta, assunto, título, breve e Markdown.
-3. Em **Treinamento**, crie um pedido. O sistema registra referências imutáveis aos itens existentes naquele instante; itens posteriores não entram no pedido anterior.
-
-O conteúdo Markdown é preservado como texto. Ele não é executado pelo navegador.
-
-## Operação e diagnóstico
-
-```bash
-docker compose config --quiet
-docker compose ps
-curl --fail http://localhost:8080/health
-curl --fail http://localhost:8000/health
-docker compose logs -f web
-docker compose logs -f laya
-docker compose down
-```
-
-Confirme o acesso da GPU dentro do container:
-
-```bash
-docker compose run --rm --entrypoint python laya -c \
-  "import torch; assert torch.cuda.is_available(); print(torch.cuda.get_device_name(0))"
-```
-
-Exemplo de inferência tipada:
-
-```bash
-curl --fail http://localhost:8000/v1/systemone \
-  -H 'content-type: application/json' \
-  --data '{"state":"Quero cancelar minha assinatura","questions":{"urgente":{"type":"noul","instructions":"O pedido exige atendimento imediato?"}}}'
-```
-
-## Fine-tuning com Kaggle
-
-O Laya não aprende diretamente de Markdown livre. Cada exemplo de fine-tuning precisa conter:
-
-1. **Estado**: texto ou documento a avaliar.
-2. **Pergunta tipada**: `choice`, `score` ou `noul`.
-3. **Critérios/opções**, quando aplicável.
-4. **Resposta esperada**: rótulo de referência.
-
-O notebook oficial executa a construção do dataset, RLCD, calibração e avaliação. A referência do projeto estima 4–5 horas em 2×T4 para quatro épocas e aproximadamente 30 mil perguntas. A GPU local de 8 GB não é indicada para esse processo completo; use Kaggle ou outra infraestrutura compatível.
-
-### Credencial Kaggle
-
-1. Entre em <https://www.kaggle.com/>.
-2. Abra **Settings > API Tokens**.
-3. Gere um token ou uma chave legada `kaggle.json`.
-4. Armazene a chave somente no Ubuntu:
-
-```bash
 mkdir -p ~/.kaggle
-cp /caminho/seguro/kaggle.json ~/.kaggle/kaggle.json
+cp /mnt/c/Users/SEU_USUARIO/Downloads/kaggle.json ~/.kaggle/kaggle.json
 chmod 600 ~/.kaggle/kaggle.json
-test -f ~/.kaggle/kaggle.json && echo 'credencial Kaggle configurada'
 ```
 
-Nunca envie `kaggle.json` pelo chat, nunca o versione e nunca o inclua em imagens Docker. A futura integração deve montá-lo somente em tempo de execução, como arquivo de leitura.
+O arquivo é montado no executor como somente leitura. Nunca versione, envie por chat ou inclua `kaggle.json` em imagens Docker.
 
-### Evidências de treinamento concluído
+## Iniciar
 
-Um fine-tune só é considerado bem-sucedido quando houver:
+```bash
+cd /opt/projects/laya-dataset-manager
+docker compose -f compose.yaml -f compose.executor.yaml up -d --build
+```
 
-- dataset tipado, exportado e versionado;
-- execução Kaggle com logs;
-- checkpoint produzido;
-- avaliação em dados separados;
-- comparação de métricas entre modelo base e especializado;
-- carregamento do modelo especializado pelo runtime Laya.
+Confira os serviços:
 
-Um pedido registrado, conteúdo salvo ou healthcheck verde não é evidência de fine-tuning.
+```bash
+docker compose -f compose.yaml -f compose.executor.yaml ps
+curl --fail http://127.0.0.1:8080/health
+curl --fail http://127.0.0.1:8000/health
+curl --fail http://127.0.0.1:8090/health
+```
+
+Abra <http://127.0.0.1:8080>.
+
+## Contrato JSONL
+
+Cada linha é um objeto independente:
+
+```json
+{"id":"caso-001","state":{"claim":"Entrega comprovada no prazo."},"questions":{"decision":{"type":"choice","labels":["aprovar","rejeitar"]}},"gold":{"decision":"aprovar"}}
+```
+
+Tipos aceitos:
+
+- `noul`: resposta booleana;
+- `choice`: resposta presente em `labels` ou `choices`;
+- `score`: critérios obrigatórios, valor entre 0 e 1 e probabilidades, quando presentes, somando 1.
+
+A importação é incremental e registra arquivo, total, válidos, inválidos, duplicados e o diagnóstico de cada linha. A exportação de uma versão é determinística e ordenada por ID.
+
+## Treinamento e artefatos
+
+A interface envia exclusivamente uma `DatasetVersion`. O executor gera o JSONL e o notebook fixado, publica o kernel privado, acompanha o estado real e baixa os outputs. Um treinamento só fica `succeeded` após validar:
+
+- manifesto e SHA-256;
+- arquivo não vazio;
+- estrutura SafeTensors;
+- quantidade de tensores;
+- presença do `model.safetensors` no diretório carregável.
+
+O checkpoint é materializado no volume `laya-dataset-manager-model-artifacts`. A ativação somente é persistida no banco depois que o runtime consegue carregar o modelo como `typed-decisions`.
+
+## Inferência
+
+Na tela **Modelos**, ative um checkpoint validado e selecione **Testar inferência**. Informe `state` e `questions`; a resposta exibida vem de `POST /v1/systemone` do runtime LAYA.
+
+A mesma operação pode ser testada pela API da aplicação:
+
+```bash
+curl --fail http://127.0.0.1:8080/api/inference \
+  -H 'content-type: application/json' \
+  --data '{"state":{"claim":"Entrega comprovada."},"questions":{"decision":{"type":"choice","labels":["aprovar","rejeitar"]}}}'
+```
+
+## Operação
+
+```bash
+docker compose -f compose.yaml -f compose.executor.yaml logs -f web
+docker compose -f compose.yaml -f compose.executor.yaml logs -f kaggle-executor
+docker compose -f compose.yaml -f compose.executor.yaml logs -f laya
+docker compose -f compose.yaml -f compose.executor.yaml down
+```
+
+Volumes persistentes:
+
+- `laya-dataset-manager-app-data`: banco SQLite;
+- `laya-dataset-manager-model-cache`: cache do LAYA/Hugging Face;
+- `laya-dataset-manager-model-artifacts`: checkpoints validados;
+- `laya-dataset-manager_kaggle-run-state`: estado do executor.
+
+## Desenvolvimento e verificação
+
+```bash
+docker compose -f compose.yaml -f compose.executor.yaml config --quiet
+docker compose -f compose.yaml -f compose.executor.yaml build
+docker compose -f compose.yaml -f compose.executor.yaml up -d
+docker compose -f compose.yaml -f compose.executor.yaml ps
+```
+
+O build do serviço `web` executa os testes Rust. Antes de publicar alterações, teste no navegador criação/edição/remoção, importação, filtros, versões, pré-validação, execução, logs, modelos, ativação e inferência.
 
 ## Estrutura
 
-- `src/`: API Rust e regras de domínio.
-- `static/`: interface web.
-- `docker/laya/`: imagem do Laya.
-- `compose.yaml`: serviços, volumes e healthchecks.
-- `docs/`: especificações.
-- `skills/github-workflow/`: fluxo versionado de PR e revisão.
+- `src/`: domínio, API e persistência Rust;
+- `static/`: interface Tabler, Bootstrap e CodeMirror;
+- `training/executor/`: executor Kaggle isolado;
+- `training/kaggle/`: utilitários de notebook;
+- `docker/laya/`: runtime LAYA com ativação controlada;
+- `compose.yaml` e `compose.executor.yaml`: serviços, volumes e healthchecks;
+- `skills/github-workflow/`: processo de PR, revisão semântica e merge.
 
 ## Segurança
 
-Não versione datasets privados, modelos, checkpoints, `.env`, tokens ou `kaggle.json`. Use dados anonimizados quando houver informações pessoais ou comerciais e avalie o modelo em dados separados antes de uso em produção.
+Não versione credenciais, datasets privados, checkpoints, outputs ou tokens. Os exemplos sintéticos incluídos para teste devem ser identificados como sintéticos e não representam dados de clientes. Use uma versão de avaliação separada antes de promover um modelo para uso real.

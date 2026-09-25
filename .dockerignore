@@ -6,7 +6,5 @@
 !src/**
 !static/
 !static/**
-!docker/
-!docker/nginx.conf
-!public/
-!public/**
+!training/
+!training/**

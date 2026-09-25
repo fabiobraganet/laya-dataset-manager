@@ -7,6 +7,10 @@ services:
     restart: unless-stopped
     environment:
       APP_DATABASE_URL: /data/laya-dataset-manager.db
+      KAGGLE_EXECUTOR_HOST: kaggle-executor
+      KAGGLE_EXECUTOR_PORT: "8090"
+      LAYA_RUNTIME_HOST: laya
+      LAYA_RUNTIME_PORT: "8000"
     volumes:
       - app-data:/data
     healthcheck:
@@ -38,6 +42,7 @@ services:
       OMP_NUM_THREADS: "4"
     volumes:
       - laya-model-cache:/home/laya/.cache/huggingface
+      - laya-model-artifacts:/models
     deploy:
       resources:
         reservations:
@@ -59,3 +64,5 @@ volumes:
     name: laya-dataset-manager-app-data
   laya-model-cache:
     name: laya-dataset-manager-model-cache
+  laya-model-artifacts:
+    name: laya-dataset-manager-model-artifacts
